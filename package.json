@@ -1,0 +1,13 @@
+{
+  "name": "heimdall",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "dashboard"
+  ],
+  "scripts": {
+    "sdk:build": "npm run build --workspace=packages/react-native-sdk",
+    "dashboard:dev": "npm run dev --workspace=dashboard",
+    "dashboard:build": "npm run build --workspace=dashboard"
+  }
+}
