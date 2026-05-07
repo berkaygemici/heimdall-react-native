@@ -28,7 +28,7 @@ try {
 export function initFirebase(firebaseConfig: FirebaseConfig): void {
   if (db) return;
 
-  const existing = getApps().find((a) => a.name === HEIMDALL_APP_NAME);
+  const existing = getApps().find((a: FirebaseApp) => a.name === HEIMDALL_APP_NAME);
   app = existing ?? initializeApp(firebaseConfig, HEIMDALL_APP_NAME);
   db = getFirestore(app);
 }

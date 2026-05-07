@@ -3,7 +3,8 @@
 #import <sys/utsname.h>
 #import <mach/mach.h>
 #import <KSCrash/KSCrash.h>
-#import <KSCrash/KSCrashReportFilterBasic.h>
+#import <KSCrash/KSCrashConfiguration.h>
+#import <KSCrash/KSCrashReport.h>
 
 @implementation HeimdallNative
 
@@ -16,9 +17,14 @@ RCT_EXPORT_MODULE();
 RCT_EXPORT_METHOD(startNativeHandler) {
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            KSCrash *handler = [KSCrash sharedInstance];
-            [handler install];
-            RCTLogInfo(@"[Heimdall] Native crash handler installed");
+            KSCrashConfiguration *config = [[KSCrashConfiguration alloc] init];
+            NSError *error = nil;
+            BOOL success = [[KSCrash sharedInstance] installWithConfiguration:config error:&error];
+            if (success) {
+                RCTLogInfo(@"[Heimdall] Native crash handler installed");
+            } else {
+                RCTLogWarn(@"[Heimdall] Failed to install native crash handler: %@", error.localizedDescription);
+            }
         } @catch (NSException *exception) {
             RCTLogWarn(@"[Heimdall] Failed to install native crash handler: %@", exception.reason);
         }
@@ -28,83 +34,87 @@ RCT_EXPORT_METHOD(startNativeHandler) {
 RCT_EXPORT_METHOD(getPendingCrashReports:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     @try {
-        KSCrash *handler = [KSCrash sharedInstance];
-        
-        [handler reportCount];
-        
-        [handler allReports:^(NSArray *reports) {
-            if (!reports || reports.count == 0) {
-                resolve(@[]);
-                return;
-            }
-            
-            NSMutableArray *parsed = [NSMutableArray array];
-            
-            for (NSDictionary *report in reports) {
-                @try {
-                    NSDictionary *crash = report[@"crash"];
-                    NSDictionary *error = crash[@"error"];
-                    NSArray *threads = crash[@"threads"];
-                    
-                    NSString *type = error[@"type"] ?: @"Unknown";
-                    NSString *reason = error[@"reason"] ?: @"Native crash";
-                    
-                    if ([type isEqualToString:@"nsexception"]) {
-                        NSDictionary *nsException = error[@"nsexception"];
-                        if (nsException) {
-                            type = nsException[@"name"] ?: type;
-                            reason = nsException[@"reason"] ?: reason;
-                        }
-                    } else if ([type isEqualToString:@"signal"]) {
-                        NSDictionary *signal = error[@"signal"];
-                        if (signal) {
-                            type = signal[@"name"] ?: type;
-                        }
-                    } else if ([type isEqualToString:@"mach"]) {
-                        NSDictionary *mach = error[@"mach"];
-                        if (mach) {
-                            type = mach[@"exception_name"] ?: type;
-                        }
+        KSCrashReportStore *store = [[KSCrash sharedInstance] reportStore];
+        if (!store) {
+            resolve(@[]);
+            return;
+        }
+
+        NSArray *reportIDs = [store reportIDs];
+        if (!reportIDs || reportIDs.count == 0) {
+            resolve(@[]);
+            return;
+        }
+
+        NSMutableArray *parsed = [NSMutableArray array];
+
+        for (NSNumber *reportID in reportIDs) {
+            @try {
+                KSCrashReportDictionary *reportObj = [store reportForID:[reportID longLongValue]];
+                if (!reportObj) continue;
+                NSDictionary *report = reportObj.value;
+
+                NSDictionary *crash = report[@"crash"];
+                NSDictionary *error = crash[@"error"];
+                NSArray *threads = crash[@"threads"];
+
+                NSString *type = error[@"type"] ?: @"Unknown";
+                NSString *reason = error[@"reason"] ?: @"Native crash";
+
+                if ([type isEqualToString:@"nsexception"]) {
+                    NSDictionary *nsException = error[@"nsexception"];
+                    if (nsException) {
+                        type = nsException[@"name"] ?: type;
+                        reason = nsException[@"reason"] ?: reason;
                     }
-                    
-                    NSMutableArray *stacktrace = [NSMutableArray array];
-                    
-                    NSDictionary *crashedThread = nil;
-                    for (NSDictionary *thread in threads) {
-                        if ([thread[@"crashed"] boolValue]) {
-                            crashedThread = thread;
-                            break;
-                        }
+                } else if ([type isEqualToString:@"signal"]) {
+                    NSDictionary *signal = error[@"signal"];
+                    if (signal) {
+                        type = signal[@"name"] ?: type;
                     }
-                    
-                    NSArray *backtrace = crashedThread[@"backtrace"][@"contents"];
-                    if (backtrace) {
-                        for (NSDictionary *frame in backtrace) {
-                            [stacktrace addObject:@{
-                                @"filename": frame[@"object_name"] ?: @"<unknown>",
-                                @"function": frame[@"symbol_name"] ?: @"<unknown>",
-                                @"lineno": frame[@"instruction_addr"] ?: @0,
-                                @"colno": @0,
-                                @"in_app": @(![frame[@"object_name"] hasPrefix:@"/usr"])
-                            }];
-                        }
+                } else if ([type isEqualToString:@"mach"]) {
+                    NSDictionary *mach = error[@"mach"];
+                    if (mach) {
+                        type = mach[@"exception_name"] ?: type;
                     }
-                    
-                    [parsed addObject:@{
-                        @"type": type,
-                        @"value": reason,
-                        @"stacktrace": stacktrace
-                    }];
-                } @catch (NSException *exception) {
-                    RCTLogWarn(@"[Heimdall] Failed to parse crash report: %@", exception.reason);
                 }
+
+                NSMutableArray *stacktrace = [NSMutableArray array];
+
+                NSDictionary *crashedThread = nil;
+                for (NSDictionary *thread in threads) {
+                    if ([thread[@"crashed"] boolValue]) {
+                        crashedThread = thread;
+                        break;
+                    }
+                }
+
+                NSArray *backtrace = crashedThread[@"backtrace"][@"contents"];
+                if (backtrace) {
+                    for (NSDictionary *frame in backtrace) {
+                        [stacktrace addObject:@{
+                            @"filename": frame[@"object_name"] ?: @"<unknown>",
+                            @"function": frame[@"symbol_name"] ?: @"<unknown>",
+                            @"lineno": frame[@"instruction_addr"] ?: @0,
+                            @"colno": @0,
+                            @"in_app": @(![frame[@"object_name"] hasPrefix:@"/usr"])
+                        }];
+                    }
+                }
+
+                [parsed addObject:@{
+                    @"type": type,
+                    @"value": reason,
+                    @"stacktrace": stacktrace
+                }];
+            } @catch (NSException *exception) {
+                RCTLogWarn(@"[Heimdall] Failed to parse crash report: %@", exception.reason);
             }
-            
-            // Delete the reports after reading
-            [handler deleteAllReports];
-            
-            resolve(parsed);
-        }];
+        }
+
+        [store deleteAllReports];
+
+        resolve(parsed);
     } @catch (NSException *exception) {
         resolve(@[]);
     }
