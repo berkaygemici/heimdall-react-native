@@ -242,7 +242,7 @@ class HeimdallClient {
     );
     const fingerprint = generateFingerprint(errorType, errorValue, stacktrace);
 
-    return {
+    const event: CrashEvent = {
       id: generateId(),
       apiKey: this.config?.apiKey ?? '',
       appId: this.appId,
@@ -258,9 +258,12 @@ class HeimdallClient {
       },
       device,
       breadcrumbs: this.breadcrumbs.getAll(),
-      user: this.user,
-      tags: Object.keys(this.tags).length > 0 ? { ...this.tags } : undefined,
     };
+    if (this.user)
+      event.user = this.user;
+    if (Object.keys(this.tags).length > 0)
+      event.tags = { ...this.tags };
+    return event;
   }
 
   private async dispatchEvent(event: CrashEvent): Promise<void> {
